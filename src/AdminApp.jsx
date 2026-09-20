@@ -215,7 +215,7 @@ export function buildInvoice(order, settings = {}) {
   const subTotal  = items.reduce((s, it) => s + Number(it.finalPrice || it.price || 0) * Number(it.qty || 1), 0);
   const discount  = Number(order.discount || 0);
   const delivery  = Number(order.delivery_fee ?? 0);
-  const packing   = Number(order.packing_charge ?? order.packingCharge ?? settings.packing_charge ?? 0);
+  const packing   = order.order_type === "dine-in" ? 0 : Number(order.packing_charge ?? order.packingCharge ?? settings.packing_charge ?? 0);
   const gstAmt    = gstPct > 0 ? Math.round((subTotal - discount) * gstPct / 100) : 0;
   const grandTotal = Number(order.total || (subTotal - discount + delivery + packing + gstAmt));
   const cur       = (n) => "Rs." + Number(n || 0).toFixed(2);
@@ -384,7 +384,7 @@ function buildReceiptHTML(order, settings = {}, isKOT = false) {
   const subTotal  = items.reduce((s, it) => s + Number(it.finalPrice || it.price || 0) * Number(it.qty || 1), 0);
   const discount  = Number(order.discount || 0);
   const delivery  = Number(order.delivery_fee ?? 0);
-  const packing   = Number(order.packing_charge ?? order.packingCharge ?? settings.packing_charge ?? 0);
+  const packing   = order.order_type === "dine-in" ? 0 : Number(order.packing_charge ?? order.packingCharge ?? settings.packing_charge ?? 0);
   const taxable   = subTotal - discount;
   const gstAmt    = gstPct > 0 ? Math.round(taxable * gstPct / 100) : 0;
   const grandTotal = Number(order.total || (taxable + delivery + packing + gstAmt));
