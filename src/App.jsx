@@ -47,6 +47,16 @@ function LandingSplash() {
       <p style={{ color: "#78716c", fontSize: "0.875rem", marginTop: "0.375rem" }}>
         Jankipuram, Lucknow
       </p>
+      <div style={{ display: "flex", gap: "6px", marginTop: "1.25rem" }}>
+        {[0, 1, 2].map(i => (
+          <div key={i} style={{
+            width: 8, height: 8, borderRadius: "50%", background: "#f97316",
+            animation: "bp-bounce 0.6s ease-in-out infinite",
+            animationDelay: `${i * 0.15}s`,
+          }} />
+        ))}
+      </div>
+      <style>{`@keyframes bp-bounce{0%,100%{transform:translateY(0);opacity:0.5}50%{transform:translateY(-8px);opacity:1}}`}</style>
     </div>
   );
 }
