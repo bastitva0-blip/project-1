@@ -599,7 +599,7 @@ function LoginScreen({ onLogin }) {
   };
 
   return (
-    <div className="bg-gradient-to-br from-stone-900 to-stone-800 flex items-center justify-center p-4 flex-1 w-full" style={{ minHeight: "100vh", minHeight: "-webkit-fill-available" }}>
+    <div className="bg-gradient-to-br from-stone-900 to-stone-800 flex items-center justify-center p-4 flex-1 w-full" style={{ minHeight: "-webkit-fill-available" }}>
       <div
         className="bg-white rounded-3xl p-8 w-full max-w-sm shadow-2xl"
         style={{

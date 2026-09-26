@@ -1,6 +1,15 @@
 import { useState, useEffect, useCallback } from "react";
-import { supabase } from "./supabase.js";
 import { SUPABASE_READY } from "./constants.js";
+
+// Supabase client is loaded on demand (dynamic import) rather than at
+// module scope. This keeps the ~55 KB gzip Supabase SDK out of every
+// route's initial bundle — including the landing page, which only needs
+// this hook for a background settings fetch, not for first paint.
+let supabasePromise = null;
+function getSupabase() {
+  if (!supabasePromise) supabasePromise = import("./supabase.js").then(m => m.supabase);
+  return supabasePromise;
+}
 
 const DEFAULTS = {
   id: 1,
@@ -50,7 +59,8 @@ async function loadSettings() {
   if (cache) return cache;
   if (inflight) return inflight;
   if (!SUPABASE_READY) { cache = DEFAULTS; return cache; }
-  inflight = supabase.from("business_settings").select("*").eq("id", 1).single()
+  inflight = getSupabase()
+    .then(supabase => supabase.from("business_settings").select("*").eq("id", 1).single())
     .then(({ data }) => { cache = data ? { ...DEFAULTS, ...data } : DEFAULTS; return cache; })
     .catch(() => { cache = DEFAULTS; return cache; });
   return inflight;
@@ -75,6 +85,7 @@ export function useBusinessSettings() {
 
   const save = useCallback(async (patch) => {
     if (!SUPABASE_READY) return { error: "Supabase not configured" };
+    const supabase = await getSupabase();
     const { data, error } = await supabase.from("business_settings")
       .update({ ...patch, updated_at: new Date().toISOString() })
       .eq("id", 1).select().single();

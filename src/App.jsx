@@ -14,7 +14,11 @@ import { ErrorBoundary } from "./ErrorBoundary.jsx";
 const AdminApp        = lazy(() => import('./AdminApp.jsx'));
 const RiderApp        = lazy(() => import('./RiderApp.jsx'));
 
-const LandingPage     = lazy(() => import('./CustomerApp.jsx').then(m => ({ default: m.LandingPage })));
+// LandingPage lives in its own file (not CustomerApp.jsx) specifically so
+// this route — the one nearly every first-time visitor hits — doesn't
+// have to download the Supabase SDK bundled into CustomerApp's chunk
+// before it can render. See LandingPage.jsx for details.
+const LandingPage     = lazy(() => import('./LandingPage.jsx'));
 const CustomerApp     = lazy(() => import('./CustomerApp.jsx').then(m => ({ default: m.CustomerApp })));
 const PrivacyPage     = lazy(() => import('./CustomerApp.jsx').then(m => ({ default: m.PrivacyPage })));
 const ContactPage     = lazy(() => import('./CustomerApp.jsx').then(m => ({ default: m.ContactPage })));
