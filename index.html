@@ -442,5 +442,35 @@
         });
       }
     </script>
+
+    <!-- ── Chunk-load error recovery ──────────────────────────────────────
+         When a new deploy is pushed, Vite renames hashed JS chunks. If a
+         returning mobile user has a stale SW serving the old index.html,
+         the new chunk filenames 404 silently and React never mounts —
+         causing the "frozen loading screen" bug on mobile.
+
+         This handler catches those import errors and does a hard reload
+         (bypassing SW cache with ?v=timestamp) so the user gets a fresh
+         shell with correct chunk references, exactly once per session.
+    ──────────────────────────────────────────────────────────────────── -->
+    <script>
+      window.addEventListener('vite:preloadError', () => {
+        if (!sessionStorage.getItem('bp-chunk-reload')) {
+          sessionStorage.setItem('bp-chunk-reload', '1');
+          window.location.href = window.location.href.split('?')[0] + '?v=' + Date.now();
+        }
+      });
+
+      // Fallback: if the root div is STILL showing the splash after 8 seconds
+      // (React never mounted), force a hard reload. Guards against any other
+      // silent JS failure that leaves the loading screen frozen.
+      setTimeout(function() {
+        var root = document.getElementById('root');
+        if (root && root.querySelector('.bp-splash') && !sessionStorage.getItem('bp-fallback-reload')) {
+          sessionStorage.setItem('bp-fallback-reload', '1');
+          window.location.href = window.location.href.split('?')[0] + '?v=' + Date.now();
+        }
+      }, 8000);
+    </script>
   </body>
 </html>
