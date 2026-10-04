@@ -4399,6 +4399,69 @@ function NewOrderPopup({ order, count, onAck }) {
 }
 
 // ─────────────────────────────────────────────────────────
+//  BACKGROUND ORDER ALERTS (Web Push)
+//  Lets the owner's phone ring even when this tab/app is closed
+//  or he is inside another app (e.g. PetPooja).
+// ─────────────────────────────────────────────────────────
+function useAdminPush(authed) {
+  // "unsupported" | "off" | "blocked" | "on"
+  const [state, setState] = useState("off");
+
+  const supported = typeof window !== "undefined" &&
+    "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+
+  const subscribe = useCallback(async () => {
+    const vapidKey = import.meta.env.VITE_VAPID_PUBLIC_KEY;
+    if (!vapidKey) throw new Error("VITE_VAPID_PUBLIC_KEY is not set");
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      const key = vapidKey.replace(/-/g, "+").replace(/_/g, "/");
+      const raw = Uint8Array.from(atob(key), c => c.charCodeAt(0));
+      sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: raw });
+    }
+    const j = sub.toJSON();
+    const { error } = await supabase.from("push_subscriptions").upsert({
+      endpoint: j.endpoint, p256dh: j.keys?.p256dh, auth: j.keys?.auth,
+      role: "admin", user_type: "admin", updated_at: new Date().toISOString(),
+    }, { onConflict: "endpoint" });
+    if (error) throw error;
+  }, []);
+
+  // Already allowed on this device → quietly refresh the subscription.
+  useEffect(() => {
+    if (!authed || !SUPABASE_READY) return;
+    if (!supported) { setState("unsupported"); return; }
+    if (Notification.permission === "denied") { setState("blocked"); return; }
+    if (Notification.permission === "granted") {
+      subscribe().then(() => setState("on")).catch(() => setState("off"));
+    }
+  }, [authed, supported, subscribe]);
+
+  // Must run from a tap (required by iOS, and by Chrome for a reliable prompt).
+  const enable = useCallback(async () => {
+    if (!supported) { setState("unsupported"); return; }
+    try {
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") { setState(perm === "denied" ? "blocked" : "off"); return; }
+      await subscribe();
+      setState("on");
+      const reg = await navigator.serviceWorker.ready;
+      reg.showNotification("✅ Order alerts are ON", {
+        body: "You'll get a loud alert for every new order, even inside PetPooja.",
+        icon: "/icon-192.png", tag: "bp-test", vibrate: [300, 100, 300],
+      });
+    } catch (e) {
+      console.error("Admin push enable failed:", e);
+      setState("off");
+      alert("Couldn't enable alerts: " + (e?.message || e));
+    }
+  }, [supported, subscribe]);
+
+  return { pushState: state, enablePush: enable };
+}
+
+// ─────────────────────────────────────────────────────────
 //  ORDER NOTIFICATION HOOK
 // ─────────────────────────────────────────────────────────
 function useOrderNotifications(orders, authed) {
@@ -4604,6 +4667,7 @@ export default function AdminApp() {
   const [reservations,    setReservations]    = useState([]);
   const [resvFilter,      setResvFilter]      = useState("pending"); // "pending"|"all"
   const { popup: newOrderPopup, unreadCount, acknowledge } = useOrderNotifications(orders, authed);
+  const { pushState, enablePush } = useAdminPush(authed);
   const [busyConfirm, setBusyConfirm] = useState(false);
   const [busy,        setBusy]        = useState({ is_busy: false, message: "We are currently closed. Please check back later.", opens_at: "" });
   const [busySaving,  setBusySaving]  = useState(false);
@@ -4893,6 +4957,22 @@ export default function AdminApp() {
           <div className="flex items-center gap-2">
             {displayBadge > 0 && (
               <span className="bg-red-500 text-white text-xs font-black px-2 py-0.5 rounded-full animate-pulse">{displayBadge} new</span>
+            )}
+            {/* 🔔 Background order alerts (rings even when using other apps) */}
+            {pushState !== "unsupported" && (
+              <button
+                onClick={() => pushState === "blocked"
+                  ? alert("Notifications are blocked. Open phone Settings → Apps → Chrome (or the installed app) → Notifications → Allow, then reload.")
+                  : pushState === "off" ? enablePush() : null}
+                title={pushState === "on" ? "Background alerts ON" : "Turn on background alerts"}
+                className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl font-black text-[11px] transition-all ${
+                  pushState === "on"
+                    ? "bg-green-100 text-green-700 border border-green-200"
+                    : "bg-red-500 text-white animate-pulse"
+                }`}>
+                <Bell size={12} />
+                {pushState === "on" ? "Alerts ON" : pushState === "blocked" ? "Blocked" : "Enable alerts"}
+              </button>
             )}
             {/* 🔴🟢 Open/Closed quick toggle */}
             <button onClick={() => setBusyConfirm(true)}
