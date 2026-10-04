@@ -12,6 +12,10 @@ UPDATE public.push_subscriptions SET role = COALESCE(user_type, 'customer') WHER
 UPDATE public.push_subscriptions SET user_type = role WHERE user_type IS NULL;
 ALTER TABLE public.push_subscriptions ALTER COLUMN role SET DEFAULT 'customer';
 CREATE INDEX IF NOT EXISTS push_subscriptions_role_idx ON public.push_subscriptions(role);
+-- Admin upsert writes updated_at and conflicts on endpoint.
+ALTER TABLE public.push_subscriptions ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
+CREATE UNIQUE INDEX IF NOT EXISTS push_subscriptions_endpoint_key ON public.push_subscriptions(endpoint);
+NOTIFY pgrst, 'reload schema';
 
 -- 2. The admin is a logged-in (authenticated) user; phase 7 only allowed `anon`.
 DROP POLICY IF EXISTS "auth insert push sub" ON public.push_subscriptions;
