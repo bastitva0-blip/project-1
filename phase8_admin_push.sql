@@ -4,9 +4,12 @@
 -- ══════════════════════════════════════════════════════════
 
 -- 1. The app + edge function use a `role` column ('customer' | 'rider' | 'admin'),
---    but phase 7 only created `user_type`. Add it so subscriptions actually save.
+--    and the admin upsert also writes `user_type`. Live projects may have only one
+--    of the two, so ensure both exist and backfill each from the other.
 ALTER TABLE public.push_subscriptions ADD COLUMN IF NOT EXISTS role text;
-UPDATE public.push_subscriptions SET role = user_type WHERE role IS NULL;
+ALTER TABLE public.push_subscriptions ADD COLUMN IF NOT EXISTS user_type text;
+UPDATE public.push_subscriptions SET role = COALESCE(user_type, 'customer') WHERE role IS NULL;
+UPDATE public.push_subscriptions SET user_type = role WHERE user_type IS NULL;
 ALTER TABLE public.push_subscriptions ALTER COLUMN role SET DEFAULT 'customer';
 CREATE INDEX IF NOT EXISTS push_subscriptions_role_idx ON public.push_subscriptions(role);
 
