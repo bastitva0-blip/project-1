@@ -1,2 +1,4 @@
 .env
-supabase/.temp/supabase/.temp/
+node_modules/
+dist/
+supabase/.temp/
