@@ -1942,6 +1942,106 @@ function useTodaySpecial(menu, bestsellers, specialItemId) {
   }, [menu, bestsellers, specialItemId]);
 }
 
+// ── PROMO CAROUSEL (top of menu) ────────────────────────────────────────────
+// Auto-sliding banners, Zomato-style. Each slide is a real menu item, so "Order Now"
+// goes through the exact same flow as adding any normal item (modal for variants/add-ons,
+// otherwise straight to cart). Swipe works natively (scroll-snap); dots are clickable.
+const PROMO_GRADIENTS = [
+  "from-orange-500 to-red-500",
+  "from-purple-600 to-pink-500",
+  "from-emerald-500 to-teal-600",
+  "from-blue-600 to-indigo-600",
+];
+const PROMO_AUTOPLAY_MS = 4000;
+
+function PromoCarousel({ slides, onOrder }) {
+  const ref = useRef(null);
+  const idxRef = useRef(0);
+  const lastTouchRef = useRef(0);
+  const hoverRef = useRef(false);
+  const [idx, setIdx] = useState(0);
+
+  const go = useCallback((i) => {
+    const el = ref.current;
+    if (!el) return;
+    el.scrollTo({ left: i * el.clientWidth, behavior: "smooth" });
+  }, []);
+
+  const onScroll = () => {
+    const el = ref.current;
+    if (!el || !el.clientWidth) return;
+    const i = Math.round(el.scrollLeft / el.clientWidth);
+    if (i !== idxRef.current) { idxRef.current = i; setIdx(i); }
+  };
+
+  // Auto-advance; pauses while the user is touching/hovering or the tab is hidden
+  useEffect(() => {
+    if (slides.length < 2) return;
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    const t = setInterval(() => {
+      if (document.hidden || hoverRef.current) return;
+      if (Date.now() - lastTouchRef.current < 5000) return;
+      go((idxRef.current + 1) % slides.length);
+    }, PROMO_AUTOPLAY_MS);
+    return () => clearInterval(t);
+  }, [slides.length, go]);
+
+  // If the slide list shrinks (e.g. item went unavailable), snap back to a valid slide
+  useEffect(() => {
+    if (idxRef.current >= slides.length) { idxRef.current = 0; setIdx(0); ref.current?.scrollTo({ left: 0 }); }
+  }, [slides.length]);
+
+  if (!slides.length) return null;
+  return (
+    <div className="px-3 pt-2 pb-1">
+      <div
+        ref={ref}
+        onScroll={onScroll}
+        onTouchStart={() => { lastTouchRef.current = Date.now(); }}
+        onTouchEnd={() => { lastTouchRef.current = Date.now(); }}
+        onMouseEnter={() => { hoverRef.current = true; }}
+        onMouseLeave={() => { hoverRef.current = false; }}
+        className="flex overflow-x-auto snap-x snap-mandatory rounded-2xl bp-hide-scroll"
+        style={{ scrollbarWidth: "none", WebkitOverflowScrolling: "touch" }}
+        role="region" aria-roledescription="carousel" aria-label="Offers">
+        {slides.map((sl, i) => (
+          <div key={sl.key} className="min-w-full snap-center" aria-hidden={i !== idx}>
+            <div className={`relative bg-gradient-to-r ${sl.grad} rounded-2xl p-4 pr-3 flex items-center gap-3 overflow-hidden min-h-[148px] shadow-sm`}>
+              {/* decorative glow */}
+              <div className="absolute -right-8 -top-8 w-40 h-40 rounded-full bg-white/10" />
+              <div className="absolute -left-6 -bottom-10 w-32 h-32 rounded-full bg-black/10" />
+              <div className="relative flex-1 min-w-0">
+                <span className="inline-block text-[9px] font-black text-white bg-white/20 backdrop-blur px-2 py-0.5 rounded-full uppercase tracking-widest mb-1.5">{sl.badge}</span>
+                <p className="text-[17px] font-black text-white leading-tight line-clamp-2">{sl.item.name}</p>
+                <p className="text-[11px] text-white/85 mt-1 leading-snug line-clamp-2">{sl.offer}</p>
+                <div className="flex items-center gap-2.5 mt-2.5">
+                  <p className="text-base font-black text-white">₹{sl.item.price}{sl.item.variants?.length ? <span className="text-[10px] font-semibold text-white/80"> onwards</span> : null}</p>
+                  <button onClick={() => onOrder(sl.item)}
+                    className="bg-white text-stone-900 font-black text-xs px-4 py-2 rounded-xl active:scale-95 transition-transform shadow-md">
+                    Order Now
+                  </button>
+                </div>
+              </div>
+              <div className="relative flex-shrink-0">
+                <ItemThumb item={sl.item} className="w-28 h-28 rotate-3 shadow-xl ring-4 ring-white/30" />
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      {slides.length > 1 && (
+        <div className="flex justify-center gap-1.5 mt-2" role="tablist" aria-label="Choose offer">
+          {slides.map((sl, i) => (
+            <button key={sl.key} role="tab" aria-selected={i === idx} aria-label={`Offer ${i + 1}`}
+              onClick={() => { lastTouchRef.current = Date.now(); go(i); }}
+              className={`h-1.5 rounded-full transition-all duration-300 ${i === idx ? "w-5 bg-orange-500" : "w-1.5 bg-stone-300"}`} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── PROMO BANNER POPUP ──────────────────────────────────────────────────────
 // Full-screen on first open (dismissed per session via sessionStorage).
 // Also exported as a small inline block for use in CartDrawer.
@@ -2399,6 +2499,40 @@ export function CustomerApp({ code, tableLabel, orderType = "dine-in" }) {
 
   const bestsellers = useBestsellers(menu);
   const todaySpecial = useTodaySpecial(menu, bestsellers, bizSettings.special_item_id);
+
+  // 3–4 carousel slides built from real, currently-available menu items
+  const bannerSlides = useMemo(() => {
+    const all = Object.values(menu).flat().filter(i => i.is_available !== false && i.price > 0);
+    const used = new Set();
+    const pick = (item) => { if (item && !used.has(item.id)) { used.add(item.id); return item; } return null; };
+    const freeAbove = Number(bizSettings.free_delivery_above || 0);
+    const deliveryLine = orderType === "delivery"
+      ? (freeAbove > 0 ? `🛵 Free delivery on orders above ₹${freeAbove}` : "🛵 Hot & fresh, delivered to your door")
+      : orderType === "takeaway" ? "📦 Skip the wait — grab it fresh" : "🍽️ Made fresh, served hot at your table";
+
+    const slides = [];
+    const special = pick(todaySpecial);
+    if (special) slides.push({ key: "special-" + special.id, item: special, badge: `⚡ ${bizSettings.special_label || "Today's Special"}`,
+      offer: special.description || "Our pick for today — don't miss it!" });
+
+    const bsPool = all.filter(i => bestsellers.has(i.id));
+    const bs1 = pick(bsPool[0]);
+    if (bs1) slides.push({ key: "bs-" + bs1.id, item: bs1, badge: "🔥 Bestseller", offer: "Most-ordered favourite — loved by our regulars" });
+
+    const rest = [...bsPool.slice(1), ...all.filter(i => i.img)];
+    const a = pick(rest.find(i => !used.has(i.id)));
+    if (a) slides.push({ key: "deal-" + a.id, item: a, badge: orderType === "delivery" ? "🛵 Delivery Offer" : "😋 Must Try", offer: deliveryLine });
+    const b = pick(rest.find(i => !used.has(i.id)));
+    if (b) slides.push({ key: "fav-" + b.id, item: b, badge: "⭐ Customer Favourite", offer: b.description || "Freshly made, every single time" });
+
+    // Not enough bestsellers/images yet? pad from any available item so there are at least 3 slides
+    while (slides.length < 3) {
+      const extra = pick(all.find(i => !used.has(i.id)));
+      if (!extra) break;
+      slides.push({ key: "more-" + extra.id, item: extra, badge: "😋 Try This", offer: extra.description || "Freshly made, every single time" });
+    }
+    return slides.slice(0, 4).map((sl, i) => ({ ...sl, grad: PROMO_GRADIENTS[i % PROMO_GRADIENTS.length] }));
+  }, [menu, bestsellers, todaySpecial, bizSettings.special_label, bizSettings.free_delivery_above, orderType]);
 
   // Promo banner — show full-screen popup once per session if enabled + has image
   const [bannerDismissed, setBannerDismissed] = useState(
@@ -3191,25 +3325,9 @@ export function CustomerApp({ code, tableLabel, orderType = "dine-in" }) {
           </div>
         </div>
 
-        {/* ✨ Today's Special */}
-        {!menuLoaded ? null : todaySpecial && !search && !showFavs && (
-          <div className="px-3 pt-2 pb-1">
-            <div className="bg-gradient-to-r from-orange-500 to-red-500 rounded-2xl p-3 flex items-center gap-3 shadow-sm">
-              <div className="w-16 h-16 rounded-xl overflow-hidden flex-shrink-0 bg-orange-400">
-                <ItemThumb item={todaySpecial} className="w-full h-full rounded-none object-cover" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-[9px] font-black text-orange-100 uppercase tracking-widest mb-0.5">⚡ {bizSettings.special_label || "Today's Special"}</p>
-                <p className="text-sm font-black text-white leading-tight truncate">{todaySpecial.name}</p>
-                {todaySpecial.description && <p className="text-[10px] text-orange-100 mt-0.5 line-clamp-1">{todaySpecial.description}</p>}
-                <p className="text-base font-black text-white mt-1">₹{todaySpecial.price}</p>
-              </div>
-              <button onClick={() => { setItemModal(todaySpecial); }}
-                className="flex-shrink-0 bg-white text-orange-600 font-black text-xs px-3 py-2 rounded-xl active:scale-95 transition-all shadow-sm">
-                ADD
-              </button>
-            </div>
-          </div>
+        {/* ✨ Promo carousel (Today's Special + bestsellers + offers) */}
+        {menuLoaded && !search && !showFavs && bannerSlides.length > 0 && (
+          <PromoCarousel slides={bannerSlides} onOrder={handleAdd} />
         )}
 
         {/* 🔥 Bestsellers — collapses to strip on scroll down */}

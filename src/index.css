@@ -120,3 +120,6 @@ body {
   from { transform: translateY(100%); opacity: 0; }
   to   { transform: translateY(0);    opacity: 1; }
 }
+
+/* hide scrollbar on swipe carousels */
+.bp-hide-scroll::-webkit-scrollbar { display: none; }
