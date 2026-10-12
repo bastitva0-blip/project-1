@@ -792,6 +792,70 @@ function RiderFallbackControls({ order, onAdvance }) {
   );
 }
 
+// ─────────────────────────────────────────────────────────
+//  DELIVERY CHARGE EDITOR
+//  Distance-based fees can be off (straight-line / routing gaps). Admin can raise
+//  (or lower) the delivery charge on a live delivery order; the order total and the
+//  printed bill follow automatically.
+// ─────────────────────────────────────────────────────────
+function DeliveryFeeEditor({ order }) {
+  const current = Number(order.delivery_fee || 0);
+  const [editing, setEditing] = useState(false);
+  const [val, setVal]         = useState(String(current));
+  const [saving, setSaving]   = useState(false);
+  const [msg, setMsg]         = useState("");
+  const paidOnline = !!order.razorpay_payment_id || /razorpay|online|upi|paid/i.test(order.payment_method || "");
+
+  useEffect(() => { if (!editing) setVal(String(Number(order.delivery_fee || 0))); }, [order.delivery_fee, editing]);
+
+  const next  = Math.max(0, Math.round(Number(val) || 0));
+  const delta = next - current;
+
+  async function save() {
+    if (!SUPABASE_READY || delta === 0) { setEditing(false); return; }
+    setSaving(true); setMsg("");
+    const { error } = await supabase.from("orders")
+      .update({ delivery_fee: next, total: Math.max(0, Number(order.total || 0) + delta) })
+      .eq("id", order.id);
+    setSaving(false);
+    if (error) { setMsg("⚠️ Couldn't save — " + error.message); return; }
+    setEditing(false);
+    setMsg(delta > 0 ? `Delivery charge raised by ₹${delta}.` : `Delivery charge reduced by ₹${-delta}.`);
+  }
+
+  return (
+    <div className="mt-2 border border-dashed border-amber-300 rounded-xl bg-amber-50/60 px-3 py-2">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[11px] font-bold text-amber-700">🛵 Delivery charge: ₹{current}{order.delivery_distance_km ? ` · ~${Number(order.delivery_distance_km).toFixed(1)} km` : ""}</p>
+        {!editing && (
+          <button onClick={() => { setEditing(true); setMsg(""); }}
+            className="text-[11px] font-bold text-amber-700 underline">Adjust</button>
+        )}
+      </div>
+      {editing && (
+        <div className="mt-2">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-stone-500">₹</span>
+            <input type="number" min="0" value={val} onChange={e => setVal(e.target.value)}
+              className="w-24 text-sm border border-amber-300 rounded-lg px-2 py-1 outline-none focus:border-amber-500 bg-white" />
+            <button onClick={save} disabled={saving}
+              className="text-[11px] font-bold bg-amber-600 text-white px-3 py-1.5 rounded-lg disabled:opacity-60">{saving ? "Saving…" : "Save"}</button>
+            <button onClick={() => { setEditing(false); setVal(String(current)); }}
+              className="text-[11px] font-bold text-stone-500 px-2 py-1.5">Cancel</button>
+          </div>
+          {delta !== 0 && (
+            <p className="text-[10px] text-amber-700 mt-1.5">
+              New order total: ₹{Math.max(0, Number(order.total || 0) + delta)} ({delta > 0 ? "+" : "−"}₹{Math.abs(delta)}).
+              {paidOnline && delta > 0 ? ` Customer already paid online — collect the extra ₹${delta} in cash on delivery.` : ""}
+            </p>
+          )}
+        </div>
+      )}
+      {msg && <p className="text-[10px] text-amber-700 mt-1">{msg}</p>}
+    </div>
+  );
+}
+
 function OrderCard({ order, onAdvance, onCancel, riders, onAssignDispatch, onPrintKOT, onPrintInvoice, isAddOn }) {
   const [open, setOpen] = useState(false);
   const [showCancel, setShowCancel] = useState(false);
@@ -1003,6 +1067,8 @@ https://maps.google.com/?q=${order.customer_lat},${order.customer_lng}`
             )}
           </div>
 
+          {order.order_type === "delivery" && !isTerminal && <DeliveryFeeEditor order={order} />}
+
           {/* Rider info */}
           {order.rider_name && (
             <div className="bg-purple-50 rounded-xl px-3 py-2 mb-3 flex items-center gap-2">
@@ -1201,6 +1267,7 @@ function BillingTab({ bizSettings }) {
   const [note,         setNote]         = useState("");
   const [payMethod,    setPayMethod]    = useState("Cash");
   const [discount,     setDiscount]     = useState(0);
+  const [deliveryFee,  setDeliveryFee]  = useState(null); // null = use default (base) charge; admin can override
   const [activeCat,    setActiveCat]    = useState(null);
   // misc custom item
   const [showCustom,   setShowCustom]   = useState(false);
@@ -1218,7 +1285,7 @@ function BillingTab({ bizSettings }) {
       if (!SUPABASE_READY) { setMenuItems(ALL_ITEMS); return; }
       const { data, error } = await supabase
         .from("menu_items")
-        .select("id,name,category,price,price_half,price_full,price_regular,price_large,is_available")
+        .select("id,name,category,price,delivery_price,price_half,price_full,price_regular,price_large,is_available")
         .order("category").order("name");
       if (error || !data || data.length === 0) {
         setMenuItems(ALL_ITEMS);
@@ -1242,7 +1309,9 @@ function BillingTab({ bizSettings }) {
     setCart(prev => {
       const idx = prev.findIndex(c => c.key === key);
       if (idx >= 0) return prev.map((c, i) => i === idx ? { ...c, qty: c.qty + 1 } : c);
-      return [...prev, { key, id: item.id, name: item.name + (variant ? ` (${variant})` : ""), price: Number(price || item.price || 0), qty: 1 }];
+      const base = Number(price || item.price || 0);
+      const dRate = !variant && item.delivery_price != null && item.delivery_price !== "" ? Number(item.delivery_price) : null;
+      return [...prev, { key, id: item.id, name: item.name + (variant ? ` (${variant})` : ""), price: orderType === "delivery" && dRate != null ? dRate : base, price0: base, dPrice: dRate, qty: 1 }];
     });
   };
 
@@ -1260,13 +1329,24 @@ function BillingTab({ bizSettings }) {
     );
   };
 
+
+  // Two-rate menu: dine-in/takeaway use rate 1, delivery uses rate 2 — re-price the cart when the type changes
+  useEffect(() => {
+    setCart(prev => prev.map(c => c.price0 == null ? c
+      : { ...c, price: orderType === "delivery" && c.dPrice != null ? c.dPrice : c.price0 }));
+    setDeliveryFee(null);
+  }, [orderType]);
+
   const gstPct    = Number(bizSettings?.gst_percent ?? 5);
   const packing   = orderType === "takeaway" ? Number(bizSettings?.packing_charge ?? 0) : 0;
+  const deliveryAmt = orderType === "delivery"
+    ? Math.max(0, Number(deliveryFee === null || deliveryFee === "" ? (bizSettings?.base_delivery_charge ?? 0) : deliveryFee) || 0)
+    : 0;
   const subtotal  = cart.reduce((s, c) => s + c.price * c.qty, 0);
   const discAmt   = Math.min(Number(discount) || 0, subtotal);
   const taxable   = subtotal - discAmt;
   const gstAmt    = Math.round(taxable * gstPct / 100);
-  const grandTotal = taxable + packing + gstAmt;
+  const grandTotal = taxable + packing + deliveryAmt + gstAmt;
 
   // Filtered menu for search
   const visible = search.trim()
@@ -1293,6 +1373,7 @@ function BillingTab({ bizSettings }) {
     total: grandTotal,
     discount: discAmt,
     packing_charge: packing,
+    delivery_fee: deliveryAmt,
     gst_amount: gstAmt,
     note: note.trim() || "",
     status: "accepted",  // POS bills go straight to accepted
@@ -1326,7 +1407,7 @@ function BillingTab({ bizSettings }) {
 
     setLastOrder(payload);
     setCart([]);
-    setNote(""); setDiscount(0);
+    setNote(""); setDiscount(0); setDeliveryFee(null);
     setCustName(""); setCustPhone(""); setTableLabel("");
     setPlacing(false);
   };
@@ -1374,7 +1455,7 @@ function BillingTab({ bizSettings }) {
       setPrintErr(e.message || "Print failed — order saved.");
     }
     setLastOrder(payload);
-    setCart([]); setNote(""); setDiscount(0);
+    setCart([]); setNote(""); setDiscount(0); setDeliveryFee(null);
     setCustName(""); setCustPhone(""); setTableLabel("");
     setPlacing(false);
   };
@@ -1588,6 +1669,16 @@ function BillingTab({ bizSettings }) {
                 {packing > 0 && (
                   <div className="flex justify-between text-xs text-stone-600"><span>Packing</span><span>₹{packing}</span></div>
                 )}
+                {orderType === "delivery" && (
+                  <div>
+                    <div className="flex items-center justify-between text-xs text-stone-600">
+                      <span>🛵 Delivery (₹)</span>
+                      <input value={deliveryFee === null ? deliveryAmt : deliveryFee} onChange={e => setDeliveryFee(e.target.value)} type="number" min="0"
+                        className="w-20 text-right text-xs border border-stone-200 rounded-md px-2 py-0.5 outline-none focus:border-orange-400 bg-white" />
+                    </div>
+                    <p className="text-[10px] text-amber-600 mt-0.5">Default is the base charge — raise it if the distance is longer.</p>
+                  </div>
+                )}
                 {gstAmt > 0 && (
                   <div className="flex justify-between text-xs text-stone-600"><span>GST ({gstPct}%)</span><span>₹{gstAmt}</span></div>
                 )}
@@ -1674,6 +1765,7 @@ function MobileBillingTab({ bizSettings }) {
   const [note,        setNote]        = useState("");
   const [payMethod,   setPayMethod]   = useState("Cash");
   const [discount,    setDiscount]    = useState(0);
+  const [deliveryFee, setDeliveryFee] = useState(null); // null = use default (base) charge; admin can override
   const [activeCat,   setActiveCat]   = useState(null);
   const [placing,     setPlacing]     = useState(false);
   const [printErr,    setPrintErr]    = useState("");
@@ -1691,7 +1783,7 @@ function MobileBillingTab({ bizSettings }) {
       if (!SUPABASE_READY) { setMenuItems(ALL_ITEMS); return; }
       const { data, error } = await supabase
         .from("menu_items")
-        .select("id,name,category,price,price_half,price_full,price_regular,price_large,is_available")
+        .select("id,name,category,price,delivery_price,price_half,price_full,price_regular,price_large,is_available")
         .order("category").order("name");
       if (error || !data || data.length === 0) {
         setMenuItems(ALL_ITEMS);
@@ -1713,7 +1805,9 @@ function MobileBillingTab({ bizSettings }) {
     setCart(prev => {
       const idx = prev.findIndex(c => c.key === key);
       if (idx >= 0) return prev.map((c, i) => i === idx ? { ...c, qty: c.qty + 1 } : c);
-      return [...prev, { key, id: item.id, name: item.name + (variant ? ` (${variant})` : ""), price: Number(price || item.price || 0), qty: 1 }];
+      const base = Number(price || item.price || 0);
+      const dRate = !variant && item.delivery_price != null && item.delivery_price !== "" ? Number(item.delivery_price) : null;
+      return [...prev, { key, id: item.id, name: item.name + (variant ? ` (${variant})` : ""), price: orderType === "delivery" && dRate != null ? dRate : base, price0: base, dPrice: dRate, qty: 1 }];
     });
   };
 
@@ -1728,13 +1822,24 @@ function MobileBillingTab({ bizSettings }) {
     setCart(prev => prev.map(c => c.key === key ? { ...c, qty: c.qty + delta } : c).filter(c => c.qty > 0));
   };
 
+
+  // Two-rate menu: dine-in/takeaway use rate 1, delivery uses rate 2 — re-price the cart when the type changes
+  useEffect(() => {
+    setCart(prev => prev.map(c => c.price0 == null ? c
+      : { ...c, price: orderType === "delivery" && c.dPrice != null ? c.dPrice : c.price0 }));
+    setDeliveryFee(null);
+  }, [orderType]);
+
   const gstPct    = Number(bizSettings?.gst_percent ?? 5);
   const packing   = orderType === "takeaway" ? Number(bizSettings?.packing_charge ?? 0) : 0;
+  const deliveryAmt = orderType === "delivery"
+    ? Math.max(0, Number(deliveryFee === null || deliveryFee === "" ? (bizSettings?.base_delivery_charge ?? 0) : deliveryFee) || 0)
+    : 0;
   const subtotal  = cart.reduce((s, c) => s + c.price * c.qty, 0);
   const discAmt   = Math.min(Number(discount) || 0, subtotal);
   const taxable   = subtotal - discAmt;
   const gstAmt    = Math.round(taxable * gstPct / 100);
-  const grandTotal = taxable + packing + gstAmt;
+  const grandTotal = taxable + packing + deliveryAmt + gstAmt;
   const totalQty  = cart.reduce((s, c) => s + c.qty, 0);
 
   const visible = search.trim()
@@ -1757,7 +1862,7 @@ function MobileBillingTab({ bizSettings }) {
       table_label: tableLabel.trim() || null,
       payment_method: payMethod,
       items: cart.map(c => ({ name: c.name, selectedVariant: null, finalPrice: c.price, qty: c.qty, addonLabels: [] })),
-      total: grandTotal, discount: discAmt, packing_charge: packing, gst_amount: gstAmt,
+      total: grandTotal, discount: discAmt, packing_charge: packing, delivery_fee: deliveryAmt, gst_amount: gstAmt,
       note: note.trim() || "", status: "accepted", time: timeStr, created_at: now.toISOString(),
     });
   };
@@ -1773,7 +1878,7 @@ function MobileBillingTab({ bizSettings }) {
     try { printInvoice(payload, bizSettings); toast.success("Billed & print dialog opened ✓"); }
     catch (e) { setPrintErr(e.message || "Print failed — order saved."); }
     setLastOrder(payload);
-    setCart([]); setNote(""); setDiscount(0);
+    setCart([]); setNote(""); setDiscount(0); setDeliveryFee(null);
     setCustName(""); setCustPhone(""); setTableLabel("");
     setPlacing(false); setShowBill(false); setShowCheckout(false);
   };
@@ -1795,7 +1900,7 @@ function MobileBillingTab({ bizSettings }) {
     try { printInvoice(payload, bizSettings); toast.success("🧾 Bill printed"); }
     catch (e) { setPrintErr(e.message || "Print failed — order saved."); }
     setLastOrder(payload);
-    setCart([]); setNote(""); setDiscount(0);
+    setCart([]); setNote(""); setDiscount(0); setDeliveryFee(null);
     setCustName(""); setCustPhone(""); setTableLabel("");
     setPlacing(false); setShowBill(false); setShowCheckout(false);
   };
@@ -1994,6 +2099,13 @@ function MobileBillingTab({ bizSettings }) {
               <div className="flex justify-between text-xs text-stone-500 mb-1"><span>Subtotal</span><span>₹{subtotal}</span></div>
               {gstAmt > 0 && <div className="flex justify-between text-xs text-stone-500 mb-1"><span>GST ({gstPct}%)</span><span>₹{gstAmt}</span></div>}
               {packing > 0 && <div className="flex justify-between text-xs text-stone-500 mb-1"><span>Packing</span><span>₹{packing}</span></div>}
+              {orderType === "delivery" && (
+                <div className="flex items-center justify-between text-xs text-stone-500 mb-1">
+                  <span>🛵 Delivery (₹)</span>
+                  <input value={deliveryFee === null ? deliveryAmt : deliveryFee} onChange={e => setDeliveryFee(e.target.value)} type="number" min="0"
+                    className="w-20 text-right text-xs border border-stone-200 rounded-md px-2 py-0.5 outline-none focus:border-orange-400 bg-white" />
+                </div>
+              )}
               <div className="flex justify-between font-black text-stone-900 text-base mt-1 pt-1 border-t border-stone-200">
                 <span>Total</span><span className="text-orange-600">₹{grandTotal}</span>
               </div>
@@ -2074,6 +2186,7 @@ function MobileBillingTab({ bizSettings }) {
                 {discAmt > 0 && <div className="flex justify-between text-xs text-green-600"><span>Discount</span><span>−₹{discAmt}</span></div>}
                 {gstAmt > 0 && <div className="flex justify-between text-xs text-stone-500"><span>GST ({gstPct}%)</span><span>₹{gstAmt}</span></div>}
                 {packing > 0 && <div className="flex justify-between text-xs text-stone-500"><span>Packing</span><span>₹{packing}</span></div>}
+                {orderType === "delivery" && <div className="flex justify-between text-xs text-stone-500"><span>🛵 Delivery</span><span>₹{deliveryAmt}</span></div>}
                 <div className="flex justify-between font-black text-stone-900 text-lg pt-2 border-t border-stone-200">
                   <span>Total</span><span className="text-orange-600">₹{grandTotal}</span>
                 </div>
@@ -2261,14 +2374,14 @@ function TablesTab({ orders }) {
 //  VARIANT BUILDER — replaces raw JSON textarea
 // ─────────────────────────────────────────────────────────
 const VARIANT_PRESETS = [
-  { label: "Half / Full",        variants: [{ label: "Half", price: "" }, { label: "Full", price: "" }] },
-  { label: "Regular / Large",    variants: [{ label: "Regular", price: "" }, { label: "Large", price: "" }] },
-  { label: "Small / Med / Large",variants: [{ label: "Small", price: "" }, { label: "Medium", price: "" }, { label: "Large", price: "" }] },
-  { label: "Tall / Full",        variants: [{ label: "Tall", price: "" }, { label: "Full", price: "" }] },
+  { label: "Half / Full",        variants: [{ label: "Half", price: "", delivery_price: "" }, { label: "Full", price: "", delivery_price: "" }] },
+  { label: "Regular / Large",    variants: [{ label: "Regular", price: "", delivery_price: "" }, { label: "Large", price: "", delivery_price: "" }] },
+  { label: "Small / Med / Large",variants: [{ label: "Small", price: "", delivery_price: "" }, { label: "Medium", price: "", delivery_price: "" }, { label: "Large", price: "", delivery_price: "" }] },
+  { label: "Tall / Full",        variants: [{ label: "Tall", price: "", delivery_price: "" }, { label: "Full", price: "", delivery_price: "" }] },
 ];
 
 function VariantBuilder({ variants, onChange }) {
-  const addRow    = () => onChange([...variants, { label: "", price: "" }]);
+  const addRow    = () => onChange([...variants, { label: "", price: "", delivery_price: "" }]);
   const removeRow = (i) => onChange(variants.filter((_, x) => x !== i));
   const update    = (i, field, val) => onChange(variants.map((v, x) => x === i ? { ...v, [field]: val } : v));
 
@@ -2296,8 +2409,16 @@ function VariantBuilder({ variants, onChange }) {
           <div className="relative">
             <span className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-sm font-bold">₹</span>
             <input type="number" min="0" value={v.price} onChange={e => update(i, "price", e.target.value)}
-              placeholder="0"
+              placeholder="Dine/TA"
+              title="Dine-in / Takeaway rate"
               className="w-24 text-sm border-2 border-stone-200 focus:border-orange-400 rounded-xl pl-7 pr-3 py-2 outline-none" />
+          </div>
+          <div className="relative">
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-sm font-bold">🛵</span>
+            <input type="number" min="0" value={v.delivery_price ?? ""} onChange={e => update(i, "delivery_price", e.target.value)}
+              placeholder="Delivery"
+              title="Delivery rate (blank = same as dine-in)"
+              className="w-28 text-sm border-2 border-stone-200 focus:border-orange-400 rounded-xl pl-8 pr-3 py-2 outline-none" />
           </div>
           <button type="button" onClick={() => removeRow(i)}
             className="w-8 h-8 flex items-center justify-center rounded-xl bg-red-50 text-red-400 hover:bg-red-100 flex-shrink-0 transition-colors">
@@ -2502,7 +2623,7 @@ function MenuTab() {
   const [editing, setEditing] = useState(null); // item being edited
 
   // Form state — variants/addons are structured arrays now, no raw JSON
-  const blankForm = { name: "", category: "burgers", price: "", img_url: "", description: "", variants: [], addons: [], is_available: true };
+  const blankForm = { name: "", category: "burgers", price: "", delivery_price: "", img_url: "", description: "", variants: [], addons: [], is_available: true };
   const [form, setForm] = useState(blankForm);
   const [saving, setSaving]       = useState(false);
   const [formErr, setFormErr]     = useState("");
@@ -2569,10 +2690,10 @@ function MenuTab() {
     // Parse existing variants/addons into structured arrays; fall back gracefully
     let variants = [];
     let addons   = [];
-    try { if (item.variants?.length) variants = item.variants.map(v => ({ label: v.label || "", price: String(v.price ?? "") })); } catch {}
+    try { if (item.variants?.length) variants = item.variants.map(v => ({ label: v.label || "", price: String(v.price ?? ""), delivery_price: v.delivery_price != null ? String(v.delivery_price) : "" })); } catch {}
     try { if (item.addons?.length)   addons   = item.addons; } catch {}
     setForm({
-      name: item.name, category: item.category, price: String(item.price),
+      name: item.name, category: item.category, price: String(item.price), delivery_price: item.delivery_price != null ? String(item.delivery_price) : "",
       img_url: item.img || item.img_url || "",
       description: item.description || "",
       variants,
@@ -2588,13 +2709,17 @@ function MenuTab() {
 
     // Build variants array from builder rows; skip empty rows
     const variants = form.variants.length
-      ? form.variants.filter(v => v.label.trim()).map(v => ({ label: v.label.trim(), price: Number(v.price) || 0 }))
+      ? form.variants.filter(v => v.label.trim()).map(v => {
+          const dp = v.delivery_price === "" || v.delivery_price == null ? null : Number(v.delivery_price);
+          return { label: v.label.trim(), price: Number(v.price) || 0, ...(dp != null && !Number.isNaN(dp) ? { delivery_price: dp } : {}) };
+        })
       : null;
     const addons = form.addons || [];
 
     setSaving(true);
     const payload = {
       name: form.name.trim(), category: form.category, price: Number(form.price),
+      delivery_price: form.delivery_price === "" || isNaN(Number(form.delivery_price)) ? null : Number(form.delivery_price),
       img: form.img_url.trim() || null, description: form.description.trim(),
       variants, addons, is_available: form.is_available,
     };
@@ -2699,7 +2824,7 @@ function MenuTab() {
                         <p className="text-sm font-bold text-stone-800 truncate">{item.name}</p>
                         {item.is_bestseller_manual && <span className="text-[9px] font-black bg-orange-100 text-orange-600 px-1.5 py-0.5 rounded-full flex-shrink-0">🔥 Bestseller</span>}
                       </div>
-                      <p className="text-xs text-stone-400">₹{item.price}{item.variants ? " onwards" : ""}{item.addons?.length ? " · customisable" : ""}</p>
+                      <p className="text-xs text-stone-400">₹{item.price}{item.variants ? " onwards" : ""}{item.delivery_price != null && Number(item.delivery_price) !== Number(item.price) ? ` · 🛵 ₹${item.delivery_price}` : ""}{item.addons?.length ? " · customisable" : ""}</p>
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0">
                       {/* Bestseller pin */}
@@ -2743,8 +2868,8 @@ function MenuTab() {
                 <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Paneer Tikki Burger"
                   className="w-full text-sm border-2 border-stone-200 focus:border-orange-400 rounded-xl px-4 py-3 outline-none text-stone-700" />
               </div>
-              {/* Category + Price */}
-              <div className="grid grid-cols-2 gap-3">
+              {/* Category */}
+              <div>
                 <div>
                   <label className="text-[10px] font-bold text-stone-400 uppercase tracking-widest block mb-1">Category</label>
                   <select value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}
@@ -2752,12 +2877,21 @@ function MenuTab() {
                     {(dbCats.length ? dbCats : CATEGORIES).map(c => <option key={c.id} value={c.id}>{c.emoji} {c.label}</option>)}
                   </select>
                 </div>
+              </div>
+              {/* Two rates: Rate 1 = Dine-in / Takeaway, Rate 2 = Delivery */}
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-[10px] font-bold text-stone-400 uppercase tracking-widest block mb-1">Base Price (₹) *</label>
+                  <label className="text-[10px] font-bold text-stone-400 uppercase tracking-widest block mb-1">🍽️📦 Dine-in / Takeaway Rate (₹) *</label>
                   <input type="number" value={form.price} onChange={e => setForm(f => ({ ...f, price: e.target.value }))} placeholder="99"
                     className="w-full text-sm border-2 border-stone-200 focus:border-orange-400 rounded-xl px-4 py-3 outline-none text-stone-700" />
                 </div>
+                <div>
+                  <label className="text-[10px] font-bold text-stone-400 uppercase tracking-widest block mb-1">🛵 Delivery Rate (₹)</label>
+                  <input type="number" value={form.delivery_price} onChange={e => setForm(f => ({ ...f, delivery_price: e.target.value }))} placeholder="same as dine-in"
+                    className="w-full text-sm border-2 border-stone-200 focus:border-orange-400 rounded-xl px-4 py-3 outline-none text-stone-700" />
+                </div>
               </div>
+              <p className="text-[10px] text-stone-400 -mt-1">Leave the delivery rate blank to charge the same rate for delivery.</p>
               {/* Photo Upload */}
               <div>
                 <label className="text-[10px] font-bold text-stone-400 uppercase tracking-widest block mb-1 flex items-center gap-1"><Image size={9} /> Photo <span className="normal-case font-normal text-stone-400">(JPG only)</span></label>
@@ -2814,7 +2948,7 @@ function MenuTab() {
                 />
                 {form.variants.length > 0 && (
                   <p className="text-[10px] text-stone-400 mt-1.5">
-                    The base price above is the default. Each size overrides it when selected.
+                    Each size has two rates: Dine-in/Takeaway and 🛵 Delivery (blank delivery = same rate).
                   </p>
                 )}
               </div>
@@ -4687,7 +4821,7 @@ export default function AdminApp() {
     todayStart.setHours(0, 0, 0, 0);
     const { data, error } = await supabase
       .from("orders")
-      .select("id,created_at,status,order_type,table_label,customer_name,customer_phone,items,total,note,payment_method,delivery_address,customer_lat,customer_lng,rider_name,rider_phone,rider_id,rider_status,route_distance_km,route_eta_minutes,delivery_started_at,cancel_reason,cancelled_at,promo_code,discount,pending_addon_items,pending_addon_total,addon_requested_at,route_geometry")
+      .select("id,created_at,status,order_type,table_label,customer_name,customer_phone,items,total,note,payment_method,delivery_address,customer_lat,customer_lng,rider_name,rider_phone,rider_id,rider_status,route_distance_km,route_eta_minutes,delivery_started_at,cancel_reason,cancelled_at,promo_code,discount,delivery_fee,packing_charge,gst_amount,delivery_distance_km,razorpay_payment_id,pending_addon_items,pending_addon_total,addon_requested_at,route_geometry")
       .gte("created_at", todayStart.toISOString())
       .order("created_at", { ascending: false });
     setLoading(false);

@@ -16,7 +16,7 @@ import {
   clearTableSession, getTrackerSteps, STATUS_CFG, isOrderActive,
   REVIEW_URL, WHATSAPP, INSTAGRAM,
 } from "./constants.js";
-import { haversineKm, calculateDelivery } from "./deliveryUtils.js";
+import { haversineKm, calculateDelivery, resolveRoadDistanceKm, applyRateForOrderType } from "./deliveryUtils.js";
 import { useBusinessSettings } from "./useBusinessSettings.js";
 import { lazy, Suspense } from "react";
 const DeliveryTracker = lazy(() => import("./DeliveryTracker.jsx"));
@@ -299,39 +299,38 @@ function CartDrawer({ cart, tableLabel, orderType, customerInfo, settings, onClo
   const [fetchingDist,   setFetchingDist]   = useState(false);
   const [isApproxDist,   setIsApproxDist]   = useState(false);
 
-  // Fetch actual road distance from OSRM whenever customer location changes
+  // Fetch actual road distance (OSRM, haversine fallback) whenever customer location changes
   useEffect(() => {
-    if (orderType !== "delivery" || !customerInfo?.lat || !customerInfo?.lng) return;
+    if (orderType !== "delivery") return;
+    if (!customerInfo?.lat || !customerInfo?.lng) { setRoadDistanceKm(null); return; }
     const rLat = settings.restaurant_lat || 26.926287;
     const rLng = settings.restaurant_lng || 80.942995;
+    let alive = true;
     setFetchingDist(true);
     setIsApproxDist(false);
-    fetch(`https://router.project-osrm.org/route/v1/driving/${rLng},${rLat};${customerInfo.lng},${customerInfo.lat}?overview=false`)
-      .then(r => r.json())
-      .then(d => {
-        const km = d.routes?.[0]?.distance / 1000;
-        setRoadDistanceKm(km ?? null);
-        setIsApproxDist(false);
-      })
-      .catch(() => {
-        // OSRM failed — fallback to haversine with 1.3x buffer to cover road vs straight-line gap
-        const straight = haversineKm(rLat, rLng, customerInfo.lat, customerInfo.lng);
-        setRoadDistanceKm(straight != null ? straight * 1.3 : null);
-        setIsApproxDist(true);
-      })
-      .finally(() => setFetchingDist(false));
+    resolveRoadDistanceKm(rLat, rLng, customerInfo.lat, customerInfo.lng).then(({ km, approx }) => {
+      if (!alive) return;
+      setRoadDistanceKm(km);
+      setIsApproxDist(approx);
+      setFetchingDist(false);
+    });
+    return () => { alive = false; };
   }, [customerInfo?.lat, customerInfo?.lng, orderType, settings.restaurant_lat, settings.restaurant_lng]);
 
   const distanceKm = roadDistanceKm;
   const deliveryCalc = orderType === "delivery" ? calculateDelivery(distanceKm, afterDiscount, settings) : null;
-  const deliveryFee  = deliveryCalc?.deliverable ? deliveryCalc.fee : 0;
+  // Delivery orders are ALWAYS charged: real fee once distance is known, the minimum
+  // (base) fee while it's still unknown. Only "out of range" resolves to 0 (and is blocked).
+  const deliveryFee  = deliveryCalc && deliveryCalc.deliverable !== false ? deliveryCalc.fee : 0;
   const packingCharge = orderType !== "dine-in" ? (settings.packing_charge || 0) : 0;
   const gstAmount = Math.round(afterDiscount * (settings.gst_percent || 0) / 100);
   const total = afterDiscount + deliveryFee + packingCharge + gstAmount;
 
   const belowMinOrder = settings.min_order_value > 0 && subtotal < settings.min_order_value;
   const blockedByDeliveryRadius = orderType === "delivery" && deliveryCalc && deliveryCalc.deliverable === false;
-  const canPlace = !belowMinOrder && !blockedByDeliveryRadius;
+  // Don't let a delivery order go out while the distance (and so the fee) is still being worked out
+  const awaitingDistance = orderType === "delivery" && fetchingDist;
+  const canPlace = !belowMinOrder && !blockedByDeliveryRadius && !awaitingDistance;
 
   const typeLabel = orderType === "delivery" ? "🛵 Delivery" : orderType === "takeaway" ? "📦 Takeaway" : null;
 
@@ -507,17 +506,28 @@ function CartDrawer({ cart, tableLabel, orderType, customerInfo, settings, onClo
                 <span>Discount ({promo.code})</span><span>−₹{discount}</span>
               </div>
             )}
-            {orderType === "delivery" && deliveryCalc?.deliverable && (
+            {orderType === "delivery" && deliveryCalc && deliveryCalc.deliverable !== false && (
               <>
                 <div className="flex justify-between text-sm text-stone-600 mb-1">
-                  <span>Delivery {fetchingDist ? "(checking…)" : deliveryCalc.distanceKm != null ? `(~${deliveryCalc.distanceKm.toFixed(1)} km${isApproxDist ? " approx" : " road"})` : ""}</span>
+                  <span>Delivery Charge {fetchingDist ? "(checking…)" : deliveryCalc.distanceKm != null ? `(~${deliveryCalc.distanceKm.toFixed(1)} km${isApproxDist ? " approx" : " road"})` : "(minimum)"}</span>
                   <span>{deliveryCalc.freeDelivery ? "FREE" : `₹${deliveryFee}`}</span>
                 </div>
+                {deliveryCalc.provisional && !fetchingDist && !deliveryCalc.freeDelivery && (
+                  <div className="flex items-start gap-1.5 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 mb-2 text-xs text-amber-700">
+                    <span className="flex-shrink-0">📍</span>
+                    <span>Minimum delivery charge shown. The final charge is calculated from your delivery location.</span>
+                  </div>
+                )}
                 {isApproxDist && !fetchingDist && (
                   <div className="flex items-start gap-1.5 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 mb-2 text-xs text-amber-700">
                     <span className="flex-shrink-0">⚠️</span>
-                    <span>Distance is approximate — road routing unavailable right now. Actual delivery fee may vary slightly.</span>
+                    <span>Distance is approximate — road routing unavailable right now.</span>
                   </div>
+                )}
+                {!deliveryCalc.freeDelivery && (
+                  <p className="text-[11px] text-stone-400 mb-2 leading-snug">
+                    ℹ️ Delivery charge may vary if your actual distance turns out to be longer than usual — we'll let you know before dispatch.
+                  </p>
                 )}
               </>
             )}
@@ -1759,6 +1769,12 @@ function OrderTracker({ order, tableLabel, onNewOrder }) {
               <span className="text-stone-500 font-semibold">₹{it.finalPrice * it.qty}</span>
             </div>
           ))}
+          {Number(liveOrder.delivery_fee ?? order.delivery_fee ?? 0) > 0 && (
+            <div className="flex justify-between text-xs text-stone-500 pt-1">
+              <span>Delivery charge</span>
+              <span className="font-semibold">₹{liveOrder.delivery_fee ?? order.delivery_fee}</span>
+            </div>
+          )}
           <div className="border-t border-stone-100 pt-2 mt-2 flex justify-between font-bold text-sm">
             <span>Total</span><span className="text-orange-600">₹{liveOrder.total ?? order.total}</span>
           </div>
@@ -2305,13 +2321,15 @@ export function CustomerApp({ code, tableLabel, orderType = "dine-in" }) {
     try {
       const raw = lsGet(LS_CART);
       if (!raw) return [];
-      const { items, ts } = JSON.parse(raw);
+      const { items, ts, rate } = JSON.parse(raw);
       if (Date.now() - ts > CART_TTL) { lsRemove(LS_CART); return []; }
+      // Delivery uses a different menu rate than dine-in/takeaway — never reuse a cart priced under the other rate
+      if ((rate === "delivery") !== (orderType === "delivery")) { lsRemove(LS_CART); return []; }
       return items || [];
     } catch { return []; }
   });
   useEffect(() => {
-    lsSet(LS_CART, JSON.stringify({ items: cart, ts: Date.now() }));
+    lsSet(LS_CART, JSON.stringify({ items: cart, ts: Date.now(), rate: orderType === "delivery" ? "delivery" : "standard" }));
   }, [cart]);
   const [showCart,      setShowCart]      = useState(false);
   const [itemModal,     setItemModal]     = useState(null);
@@ -2507,7 +2525,7 @@ export function CustomerApp({ code, tableLabel, orderType = "dine-in" }) {
           const grouped = {};
           data.forEach(item => {
             if (!grouped[item.category]) grouped[item.category] = [];
-            const parsed = { ...item, variants: item.variants || null, addons: item.addons || [] };
+            const parsed = applyRateForOrderType({ ...item, variants: item.variants || null, addons: item.addons || [] }, orderType);
             grouped[item.category].push(parsed);
           });
           setMenu(grouped);
@@ -2541,7 +2559,7 @@ export function CustomerApp({ code, tableLabel, orderType = "dine-in" }) {
             const grouped = {};
             data.forEach(item => {
               if (!grouped[item.category]) grouped[item.category] = [];
-              grouped[item.category].push({ ...item, variants: item.variants || null, addons: item.addons || [] });
+              grouped[item.category].push(applyRateForOrderType({ ...item, variants: item.variants || null, addons: item.addons || [] }, orderType));
             });
             setMenu(grouped);
             setMenuIsStale(false);
@@ -2743,7 +2761,7 @@ export function CustomerApp({ code, tableLabel, orderType = "dine-in" }) {
     // For delivery/takeaway, collect info at checkout time if not already saved
     const needsInfo = (orderType === "delivery" || orderType === "takeaway")
       && (!customerInfo?.name || !customerInfo?.phone
-          || (orderType === "delivery" && !customerInfo?.address));
+          || (orderType === "delivery" && (!customerInfo?.address || !customerInfo?.lat || !customerInfo?.lng)));
     if (needsInfo) {
       setPendingOpts(opts); // Fix 10: always update opts, don't clobber with null
       setShowInfoModal(true);
@@ -2757,11 +2775,40 @@ export function CustomerApp({ code, tableLabel, orderType = "dine-in" }) {
     }
     // If we already have pendingOpts from a previously-dismissed info sheet, keep them
     setPendingOpts(null);
-    setShowRazorpay({ ...opts, _orderId: crypto.randomUUID() });
+    let finalOpts = opts;
+    if (orderType === "delivery" && (opts.distanceKm == null || !opts.deliveryFee)) {
+      // distance missing or fee came out 0 — re-verify against saved location so we never undercharge
+      finalOpts = await refreshDeliveryOpts(opts, customerInfo);
+      if (!finalOpts) return;
+    }
+    setShowRazorpay({ ...finalOpts, _orderId: crypto.randomUUID() });
   };
 
   // Called when info modal is submitted
-  const handleInfoSubmit = (info) => {
+  // Delivery fee is only as good as the location it was computed from. The cart drawer may have
+  // priced the order BEFORE a location existed (fee fell back to the minimum), so once we have the
+  // real coordinates, recompute distance → fee → total before the order is sent.
+  const refreshDeliveryOpts = async (opts, info) => {
+    if (orderType !== "delivery") return opts;
+    const afterDiscount = Math.max(0, Number(opts.total || 0) - Number(opts.deliveryFee || 0) - Number(opts.packingCharge || 0) - Number(opts.gstAmount || 0));
+    const { km } = await resolveRoadDistanceKm(
+      bizSettings.restaurant_lat || 26.926287, bizSettings.restaurant_lng || 80.942995, info?.lat, info?.lng
+    );
+    const calc = calculateDelivery(km, afterDiscount, bizSettings);
+    if (calc.deliverable === false) {
+      setCartValidationError(calc.reason);
+      setShowCart(true);
+      return null;
+    }
+    const deliveryFee = calc.fee;
+    return {
+      ...opts, deliveryFee,
+      distanceKm: calc.distanceKm ?? opts.distanceKm ?? null,
+      total: afterDiscount + deliveryFee + Number(opts.packingCharge || 0) + Number(opts.gstAmount || 0),
+    };
+  };
+
+  const handleInfoSubmit = async (info) => {
     saveCustomerInfo(info);
     setShowInfoModal(false);
     // Bug 5 fix: capture pendingOpts before clearing — if it somehow got cleared,
@@ -2769,7 +2816,9 @@ export function CustomerApp({ code, tableLabel, orderType = "dine-in" }) {
     const optsToUse = pendingOpts;
     setPendingOpts(null);
     if (optsToUse) {
-      setShowRazorpay({ ...optsToUse, _orderId: crypto.randomUUID() });
+      const fresh = await refreshDeliveryOpts(optsToUse, info);
+      if (!fresh) return;
+      setShowRazorpay({ ...fresh, _orderId: crypto.randomUUID() });
     } else {
       setShowCart(true); // fallback: re-open cart so customer can retry
     }
