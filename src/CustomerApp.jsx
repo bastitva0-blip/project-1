@@ -2502,7 +2502,8 @@ export function CustomerApp({ code, tableLabel, orderType = "dine-in" }) {
   // Carousel slides — fully admin-controlled: up to 4 slots, each = label + featured item.
   // Slots with no item (or an item that is sold out / removed) are skipped. No automatic picks.
   const bannerSlides = useMemo(() => {
-    const byId = new Map(Object.values(menu).flat().map(i => [i.id, i]));
+    // Compare ids as strings so a number/text mismatch can never hide a slide
+    const byId = new Map(Object.values(menu).flat().map(i => [String(i.id), i]));
     const slots = [
       [bizSettings.special_label,   bizSettings.special_item_id],
       [bizSettings.special_label_2, bizSettings.special_item_id_2],
@@ -2512,8 +2513,17 @@ export function CustomerApp({ code, tableLabel, orderType = "dine-in" }) {
     const defaults = ["Today's Special", "Bestseller", "Must Try", "Customer Favourite"];
     const out = [];
     slots.forEach(([label, id], n) => {
-      const item = id ? byId.get(id) : null;
-      if (!item || item.is_available === false || !(item.price > 0)) return;
+      const found = id ? byId.get(String(id)) : null;
+      if (!found || found.is_available === false) return;
+      // Items priced only through variants have price 0/null — use the cheapest variant
+      // so they still show (previously `!(price > 0)` silently dropped them).
+      let item = found;
+      if (!(Number(item.price) > 0)) {
+        const vp = (Array.isArray(item.variants) ? item.variants : [])
+          .map(v => Number(v.price)).filter(x => x > 0);
+        if (!vp.length) return;
+        item = { ...item, price: Math.min(...vp) };
+      }
       out.push({
         key: `slot${n + 1}-${item.id}`,
         item,

@@ -3807,7 +3807,7 @@ function PromoBannerSection() {
   // Load all menu items for the "pin a specific item" dropdown
   useEffect(() => {
     if (!SUPABASE_READY) return;
-    supabase.from("menu_items").select("id, name, category").order("name")
+    supabase.from("menu_items").select("id, name, category, price, is_available").order("name")
       .then(({ data }) => { if (data) setMenuItems(data); });
   }, []);
 
@@ -3888,7 +3888,7 @@ function PromoBannerSection() {
                 >
                   <option value="">— Not used (skip this slide) —</option>
                   {menuItems.map(i => (
-                    <option key={i.id} value={i.id}>{i.name} · {i.category}</option>
+                    <option key={i.id} value={i.id}>{i.name} · {i.category}{i.is_available === false ? " (SOLD OUT — will be skipped)" : ""}</option>
                   ))}
                 </select>
               </div>
