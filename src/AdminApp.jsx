@@ -3778,6 +3778,9 @@ function PromoBannerSection() {
   const [form, setForm] = useState({
     special_label:        "Today's Special",
     special_item_id:      null,
+    special_label_2: "Bestseller",          special_item_id_2: null,
+    special_label_3: "Must Try",            special_item_id_3: null,
+    special_label_4: "Customer Favourite",  special_item_id_4: null,
     promo_banner_url:     null,
     promo_banner_enabled: false,
   });
@@ -3792,6 +3795,9 @@ function PromoBannerSection() {
       setForm({
         special_label:        settings.special_label        ?? "Today's Special",
         special_item_id:      settings.special_item_id      ?? null,
+        special_label_2: settings.special_label_2 ?? "Bestseller",          special_item_id_2: settings.special_item_id_2 ?? null,
+        special_label_3: settings.special_label_3 ?? "Must Try",            special_item_id_3: settings.special_item_id_3 ?? null,
+        special_label_4: settings.special_label_4 ?? "Customer Favourite",  special_item_id_4: settings.special_item_id_4 ?? null,
         promo_banner_url:     settings.promo_banner_url     ?? null,
         promo_banner_enabled: settings.promo_banner_enabled ?? false,
       });
@@ -3831,6 +3837,9 @@ function PromoBannerSection() {
     const { error } = await save({
       special_label:        form.special_label || "Today's Special",
       special_item_id:      form.special_item_id || null,
+      special_label_2: form.special_label_2 || "Bestseller",         special_item_id_2: form.special_item_id_2 || null,
+      special_label_3: form.special_label_3 || "Must Try",           special_item_id_3: form.special_item_id_3 || null,
+      special_label_4: form.special_label_4 || "Customer Favourite", special_item_id_4: form.special_item_id_4 || null,
       promo_banner_url:     form.promo_banner_url || null,
       promo_banner_enabled: !!form.promo_banner_enabled,
     });
@@ -3846,38 +3855,47 @@ function PromoBannerSection() {
   if (loading) return <Section emoji="🎯" title="Today's Special &amp; Promo Banner"><p className="text-xs text-stone-400">Loading…</p></Section>;
 
   return (
-    <Section emoji="🎯" title="Today's Special & Promo Banner">
+    <Section emoji="🎯" title="Home Slider & Promo Banner">
 
-      {/* ── TODAY'S SPECIAL ── */}
-      <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest mb-2">Today's Special Card</p>
+      {/* ── HOME PAGE SLIDER (4 slides) ── */}
+      <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest mb-1">Home Page Slider — 4 Featured Slides</p>
+      <p className="text-[10px] text-stone-400 mb-3">Each slide = a label + a featured item. Slides with no item are skipped. Customers' "Order Now" opens that item.</p>
       <div className="space-y-3">
-        {/* Label / rename */}
-        <div>
-          <label className="text-[10px] font-bold text-stone-400 uppercase tracking-widest block mb-1">Section Label</label>
-          <input
-            value={form.special_label ?? ""}
-            onChange={e => setForm(f => ({ ...f, special_label: e.target.value }))}
-            placeholder="Today's Special"
-            className={inputCls}
-          />
-          <p className="text-[10px] text-stone-400 mt-1">Shown above the featured item card — e.g. "Independence Day's Special", "Chef's Pick"</p>
-        </div>
-
-        {/* Pin a specific item */}
-        <div>
-          <label className="text-[10px] font-bold text-stone-400 uppercase tracking-widest block mb-1">Featured Item</label>
-          <select
-            value={form.special_item_id ?? ""}
-            onChange={e => setForm(f => ({ ...f, special_item_id: e.target.value || null }))}
-            className={inputCls}
-          >
-            <option value="">— Auto (rotate bestsellers daily) —</option>
-            {menuItems.map(i => (
-              <option key={i.id} value={i.id}>{i.name} · {i.category}</option>
-            ))}
-          </select>
-          <p className="text-[10px] text-stone-400 mt-1">Pin a specific item or leave auto to rotate daily from bestsellers</p>
-        </div>
+        {[
+          ["special_label",   "special_item_id",   1],
+          ["special_label_2", "special_item_id_2", 2],
+          ["special_label_3", "special_item_id_3", 3],
+          ["special_label_4", "special_item_id_4", 4],
+        ].map(([lk, ik, n]) => (
+          <div key={n} className="border-2 border-stone-100 rounded-2xl p-3 bg-stone-50/60">
+            <p className="text-xs font-black text-stone-600 mb-2">Slide {n}</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div>
+                <label className="text-[10px] font-bold text-stone-400 uppercase tracking-widest block mb-1">Label {n}</label>
+                <input
+                  value={form[lk] ?? ""}
+                  onChange={e => setForm(f => ({ ...f, [lk]: e.target.value }))}
+                  placeholder={n === 1 ? "Today's Special" : `Label ${n}`}
+                  className={inputCls}
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-stone-400 uppercase tracking-widest block mb-1">Featured Item {n}</label>
+                <select
+                  value={form[ik] ?? ""}
+                  onChange={e => setForm(f => ({ ...f, [ik]: e.target.value || null }))}
+                  className={inputCls}
+                >
+                  <option value="">— Not used (skip this slide) —</option>
+                  {menuItems.map(i => (
+                    <option key={i.id} value={i.id}>{i.name} · {i.category}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </div>
+        ))}
+        <p className="text-[10px] text-stone-400">Examples of labels: "Today's Special", "Chef's Pick", "Weekend Offer", "Independence Day Special". Sold-out items are skipped automatically.</p>
       </div>
 
       {/* ── PROMO BANNER ── */}

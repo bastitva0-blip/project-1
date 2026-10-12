@@ -2498,41 +2498,36 @@ export function CustomerApp({ code, tableLabel, orderType = "dine-in" }) {
   useEffect(() => { cartRef.current = cart; }, [cart]);
 
   const bestsellers = useBestsellers(menu);
-  const todaySpecial = useTodaySpecial(menu, bestsellers, bizSettings.special_item_id);
 
-  // 3–4 carousel slides built from real, currently-available menu items
+  // Carousel slides — fully admin-controlled: up to 4 slots, each = label + featured item.
+  // Slots with no item (or an item that is sold out / removed) are skipped. No automatic picks.
   const bannerSlides = useMemo(() => {
-    const all = Object.values(menu).flat().filter(i => i.is_available !== false && i.price > 0);
-    const used = new Set();
-    const pick = (item) => { if (item && !used.has(item.id)) { used.add(item.id); return item; } return null; };
-    const freeAbove = Number(bizSettings.free_delivery_above || 0);
-    const deliveryLine = orderType === "delivery"
-      ? (freeAbove > 0 ? `🛵 Free delivery on orders above ₹${freeAbove}` : "🛵 Hot & fresh, delivered to your door")
-      : orderType === "takeaway" ? "📦 Skip the wait — grab it fresh" : "🍽️ Made fresh, served hot at your table";
-
-    const slides = [];
-    const special = pick(todaySpecial);
-    if (special) slides.push({ key: "special-" + special.id, item: special, badge: `⚡ ${bizSettings.special_label || "Today's Special"}`,
-      offer: special.description || "Our pick for today — don't miss it!" });
-
-    const bsPool = all.filter(i => bestsellers.has(i.id));
-    const bs1 = pick(bsPool[0]);
-    if (bs1) slides.push({ key: "bs-" + bs1.id, item: bs1, badge: "🔥 Bestseller", offer: "Most-ordered favourite — loved by our regulars" });
-
-    const rest = [...bsPool.slice(1), ...all.filter(i => i.img)];
-    const a = pick(rest.find(i => !used.has(i.id)));
-    if (a) slides.push({ key: "deal-" + a.id, item: a, badge: orderType === "delivery" ? "🛵 Delivery Offer" : "😋 Must Try", offer: deliveryLine });
-    const b = pick(rest.find(i => !used.has(i.id)));
-    if (b) slides.push({ key: "fav-" + b.id, item: b, badge: "⭐ Customer Favourite", offer: b.description || "Freshly made, every single time" });
-
-    // Not enough bestsellers/images yet? pad from any available item so there are at least 3 slides
-    while (slides.length < 3) {
-      const extra = pick(all.find(i => !used.has(i.id)));
-      if (!extra) break;
-      slides.push({ key: "more-" + extra.id, item: extra, badge: "😋 Try This", offer: extra.description || "Freshly made, every single time" });
-    }
-    return slides.slice(0, 4).map((sl, i) => ({ ...sl, grad: PROMO_GRADIENTS[i % PROMO_GRADIENTS.length] }));
-  }, [menu, bestsellers, todaySpecial, bizSettings.special_label, bizSettings.free_delivery_above, orderType]);
+    const byId = new Map(Object.values(menu).flat().map(i => [i.id, i]));
+    const slots = [
+      [bizSettings.special_label,   bizSettings.special_item_id],
+      [bizSettings.special_label_2, bizSettings.special_item_id_2],
+      [bizSettings.special_label_3, bizSettings.special_item_id_3],
+      [bizSettings.special_label_4, bizSettings.special_item_id_4],
+    ];
+    const defaults = ["Today's Special", "Bestseller", "Must Try", "Customer Favourite"];
+    const out = [];
+    slots.forEach(([label, id], n) => {
+      const item = id ? byId.get(id) : null;
+      if (!item || item.is_available === false || !(item.price > 0)) return;
+      out.push({
+        key: `slot${n + 1}-${item.id}`,
+        item,
+        badge: `⚡ ${(label || "").trim() || defaults[n]}`,
+        offer: item.description || "Freshly made, every single time",
+        grad: PROMO_GRADIENTS[out.length % PROMO_GRADIENTS.length],
+      });
+    });
+    return out;
+  }, [menu,
+      bizSettings.special_label,   bizSettings.special_item_id,
+      bizSettings.special_label_2, bizSettings.special_item_id_2,
+      bizSettings.special_label_3, bizSettings.special_item_id_3,
+      bizSettings.special_label_4, bizSettings.special_item_id_4]);
 
   // Promo banner — show full-screen popup once per session if enabled + has image
   const [bannerDismissed, setBannerDismissed] = useState(

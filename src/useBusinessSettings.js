@@ -46,6 +46,12 @@ const DEFAULTS = {
   // Today's Special / Promo Banner
   special_label:        "Today's Special",
   special_item_id:      null,
+  special_label_2:      "Bestseller",
+  special_item_id_2:    null,
+  special_label_3:      "Must Try",
+  special_item_id_3:    null,
+  special_label_4:      "Customer Favourite",
+  special_item_id_4:    null,
   promo_banner_url:     null,
   promo_banner_enabled: false,
 };
