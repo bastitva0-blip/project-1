@@ -19,6 +19,94 @@ const ArrowLeft   = ({ size = 12 }) => <svg width={size} height={size} viewBox="
 const Download    = ({ size = 15 }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>;
 const CalendarDays= ({ size = 15 }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="14" x2="8" y2="14"/><line x1="12" y1="14" x2="12" y2="14"/><line x1="16" y1="14" x2="16" y2="14"/></svg>;
 
+const ScanIcon = ({ size = 18 }) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/></svg>;
+
+// Pulls the 10-digit table code out of whatever the QR holds:
+// a full link like https://burgerpoint.co.in/#table=7294831056, or just the digits.
+function extractTableCode(text) {
+  const t = String(text || "");
+  const m = t.match(/table=(\d{10})/) || t.match(/(?<!\d)(\d{10})(?!\d)/);
+  return m ? m[1] : null;
+}
+
+// Camera QR scanner. jsQR is dynamic-imported only when the scanner opens,
+// so it adds nothing to the landing page's first load.
+function QrScanner({ onCode, onClose }) {
+  const videoRef = useRef(null);
+  const [msg, setMsg] = useState("Starting camera…");
+  const [fatal, setFatal] = useState(false);
+
+  useEffect(() => {
+    let stream = null, raf = 0, done = false, lastRun = 0, lastBadAt = 0;
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    const stop = () => { done = true; cancelAnimationFrame(raf); stream?.getTracks().forEach(t => t.stop()); };
+
+    (async () => {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setFatal(true); setMsg("This browser can't open the camera. Please type the table code instead."); return;
+      }
+      try {
+        const [{ default: jsQR }, s] = await Promise.all([
+          import("jsqr"),
+          navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false }),
+        ]);
+        stream = s;
+        if (done) { stop(); return; }
+        const v = videoRef.current;
+        v.srcObject = s;
+        await v.play();
+        setMsg("Point the camera at the QR on your table");
+
+        const tick = (now) => {
+          if (done) return;
+          raf = requestAnimationFrame(tick);
+          if (now - lastRun < 120 || v.readyState < 2 || !v.videoWidth) return; // ~8 scans/sec is plenty
+          lastRun = now;
+          const w = Math.min(520, v.videoWidth);
+          const h = Math.round(v.videoHeight * (w / v.videoWidth));
+          canvas.width = w; canvas.height = h;
+          ctx.drawImage(v, 0, 0, w, h);
+          const hit = jsQR(ctx.getImageData(0, 0, w, h).data, w, h, { inversionAttempts: "dontInvert" });
+          if (!hit?.data) return;
+          const code = extractTableCode(hit.data);
+          if (code) { stop(); if (navigator.vibrate) navigator.vibrate(60); onCode(code); }
+          else if (now - lastBadAt > 1500) { lastBadAt = now; setMsg("That QR isn't a table code. Try the one on your table."); }
+        };
+        raf = requestAnimationFrame(tick);
+      } catch (e) {
+        stop(); setFatal(true);
+        setMsg(e?.name === "NotAllowedError"
+          ? "Camera permission is blocked. Allow it in your browser settings, or type the table code instead."
+          : "Couldn't start the camera. Please type the table code instead.");
+      }
+    })();
+    return stop;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black flex flex-col" role="dialog" aria-label="Scan table QR code">
+      <div className="flex items-center justify-between px-4 py-3 text-white">
+        <p className="font-bold text-sm">Scan table QR</p>
+        <button onClick={onClose} aria-label="Close scanner" className="w-9 h-9 rounded-full bg-white/15 flex items-center justify-center"><X size={18} /></button>
+      </div>
+      <div className="relative flex-1 overflow-hidden">
+        <video ref={videoRef} playsInline muted className="absolute inset-0 w-full h-full object-cover" />
+        {!fatal && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <div className="w-64 h-64 rounded-3xl border-4 border-white/90" style={{ boxShadow: "0 0 0 9999px rgba(0,0,0,0.55)" }} />
+          </div>
+        )}
+      </div>
+      <div className="px-6 py-5 text-center">
+        <p className={`text-sm ${fatal ? "text-red-300" : "text-white/90"}`} aria-live="polite">{msg}</p>
+        <button onClick={onClose} className="mt-3 text-white/70 text-xs underline">Enter code manually</button>
+      </div>
+    </div>
+  );
+}
+
 import { SUPABASE_READY, REVIEW_URL, WHATSAPP, INSTAGRAM } from "./constants.js";
 import { useBusinessSettings } from "./useBusinessSettings.js";
 
@@ -41,6 +129,7 @@ export function LandingPage({ installPrompt }) {
   const [shake,         setShake]         = useState(false);
   const [iosHint,       setIosHint]       = useState(false);
   const [busy,          setBusy]          = useState(null);
+  const [scanning,      setScanning]      = useState(false);
   const inputRef = useRef(null);
   const isIos        = /iphone|ipad|ipod/i.test(navigator.userAgent);
   const isStandalone = window.matchMedia("(display-mode:standalone)").matches;
@@ -139,13 +228,20 @@ export function LandingPage({ installPrompt }) {
         </div>
       )}
 
+      {scanning && <QrScanner onClose={() => setScanning(false)} onCode={(c) => { setScanning(false); setCode(c); go(c); }} />}
+
       {mode === "dine" && (
         <div className={`bg-white rounded-3xl shadow-xl border border-orange-100 p-6 w-full max-w-sm ${shake ? "animate-pulse" : ""}`}>
           <button onClick={() => { setMode(null); setCode(""); setErr(""); }} className="text-xs text-stone-400 flex items-center gap-1 mb-4">
             <ArrowLeft size={12} /> Back
           </button>
           <h2 className="font-bold text-stone-700 text-base mb-1 text-center">Enter Table Code</h2>
-          <p className="text-xs text-stone-400 text-center mb-5">10-digit code on your table card</p>
+          <p className="text-xs text-stone-400 text-center mb-4">Scan the QR on your table, or type the 10-digit code</p>
+          <button onClick={() => { setErr(""); setScanning(true); }}
+            className="w-full flex items-center justify-center gap-2 bg-orange-50 border-2 border-dashed border-orange-300 text-orange-700 font-bold text-sm py-3.5 rounded-2xl mb-3 active:scale-[0.98] transition-transform">
+            <ScanIcon size={18} /> Scan table QR
+          </button>
+          <div className="flex items-center gap-3 mb-3"><span className="flex-1 h-px bg-stone-100" /><span className="text-[10px] text-stone-300 font-bold">OR TYPE CODE</span><span className="flex-1 h-px bg-stone-100" /></div>
           <div className="relative mb-3">
             <input ref={inputRef} value={code}
               onChange={e => { setCode(e.target.value.replace(/\D/g, "").slice(0, 10)); setErr(""); }}
