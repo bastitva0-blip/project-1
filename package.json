@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.43.1",
+    "exceljs": "^4.4.0",
     "framer-motion": "^11.3.0",
     "jsqr": "^1.4.0",
     "leaflet": "^1.9.4",

@@ -11,6 +11,8 @@ import {
   Search, LayoutGrid, XCircle,
 } from "lucide-react";
 import { supabase } from "./supabase.js";
+import { Download as DownloadIcon } from "lucide-react";
+import { downloadSalesReport, REPORT_DAYS } from "./salesReport.js";
 import { SUPABASE_READY, STATUS_CFG, getNextStep, CATEGORIES, DEFAULT_MENU, ALL_ITEMS, TABLE_CODES,
   CANCEL_REASONS, ACTIVE_STATUSES, isOrderActive, isOrderTerminal,
 } from "./constants.js";
@@ -3076,6 +3078,21 @@ function SalesHistoryCard({ o }) {
 function SalesTab() {
   const [orders,  setOrders]  = useState([]);
   const [loading, setLoading] = useState(true);
+  const toast = useToast();
+  const [reportBusy, setReportBusy] = useState(false);
+
+  const handleDownloadReport = async () => {
+    if (!SUPABASE_READY || reportBusy) return;
+    setReportBusy(true);
+    try {
+      const { orders: n } = await downloadSalesReport(supabase);
+      if (n === 0) toast.warning(`No orders in the last ${REPORT_DAYS} days — downloaded an empty report.`);
+      else toast.success(`Report downloaded (${n} orders).`);
+    } catch (e) {
+      console.error("Sales report failed", e);
+      toast.error("Couldn't create the report. Check your connection and try again.");
+    } finally { setReportBusy(false); }
+  };
 
   useEffect(() => {
     if (!SUPABASE_READY) { setLoading(false); return; }
@@ -3160,6 +3177,18 @@ function SalesTab() {
           })}
         </div>
       </div>
+
+      {/* 30-day report download */}
+      <button onClick={handleDownloadReport} disabled={reportBusy}
+        className="w-full flex items-center gap-3 bg-white border-2 border-orange-100 hover:border-orange-300 rounded-2xl p-4 shadow-sm text-left transition-all active:scale-[0.99] disabled:opacity-60">
+        <span className="w-10 h-10 rounded-xl bg-orange-50 text-orange-600 flex items-center justify-center flex-shrink-0">
+          {reportBusy ? <RefreshCw size={18} className="animate-spin" /> : <DownloadIcon size={18} />}
+        </span>
+        <span className="flex-1 min-w-0">
+          <span className="block text-sm font-black text-stone-800">{reportBusy ? "Preparing report…" : `Download ${REPORT_DAYS}-day sales report`}</span>
+          <span className="block text-[11px] text-stone-400">Excel file · overview, payments, coupons, bestsellers, daily sales, peak hours, top customers</span>
+        </span>
+      </button>
 
       {/* Order type breakdown */}
       <div className="bg-white border border-stone-100 rounded-2xl p-4 shadow-sm">
